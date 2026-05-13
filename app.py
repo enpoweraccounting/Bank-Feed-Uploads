@@ -13,9 +13,10 @@ PLATFORM_CONFIG = {
         "amount_col": "Amount",
     },
     "Clearent": {
-        "date_col": "Cleared Time in Statement (MT)",
-        "desc_cols": ["Clean Merchant Name", "Card Name", "Card Last 4"],
+        "date_col": "Transaction Date",
+        "desc_cols": ["Customer Name", "Order ID", "Description"],
         "amount_col": "Amount",
+        "clearent": True,
     },
     "Divvy": {
         "date_col": "Cleared Time in Statement (MT)",
@@ -23,9 +24,10 @@ PLATFORM_CONFIG = {
         "amount_col": "Amount",
     },
     "Donors Fund": {
-        "date_col": "Cleared Time in Statement (MT)",
-        "desc_cols": ["Clean Merchant Name", "Card Name", "Card Last 4"],
+        "date_col": "Date",
+        "desc_cols": ["Shared Name", "Shared Fund Name", "Memo"],
         "amount_col": "Amount",
+        "donors_fund": True,
     },
 }
  
@@ -73,7 +75,8 @@ def parse_amount(val: str, negate: bool) -> str:
 def parse_date_flexible(val: str):
     for fmt in ("%m/%d/%Y", "%Y-%m-%d", "%m/%d/%y",
                 "%m/%d/%Y %H:%M", "%m/%d/%Y %H:%M:%S",
-                "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+                "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M",
+                "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f"):
         try:
             return datetime.strptime(str(val).strip(), fmt)
         except ValueError:
@@ -126,6 +129,40 @@ def process(df: pd.DataFrame, config: dict, start: date, end: date) -> pd.DataFr
             continue
  
         formatted_date = tx_date.strftime("%-m/%-d/%Y")
+ 
+        if config.get("clearent"):
+            customer = row.get("Customer Name", "").strip()
+            order_id = row.get("Order ID", "").strip()
+            desc_field = row.get("Description", "").strip()
+            if re.match(r'^\d+$', order_id):
+                order_id = ""
+            description = " - ".join(filter(bool, [customer, order_id, desc_field]))
+            amount = parse_amount(row.get("Amount", ""), False)
+            output.append({"Date": formatted_date, "Description": description, "Amount": amount})
+            continue
+ 
+        if config.get("donors_fund"):
+            shared_name = row.get("Shared Name", "").strip()
+            shared_fund = row.get("Shared Fund Name", "").strip()
+            memo = row.get("Memo", "").strip()
+            payment_type = row.get("Payment Type", "").strip()
+            conf_num = str(row.get("Confirmation Number", "")).strip()
+            base_parts = list(filter(bool, [shared_name, shared_fund]))
+            description = " - ".join(base_parts)
+            suffix_parts = list(filter(bool, [payment_type, conf_num, memo]))
+            if suffix_parts:
+                description += f" ({', '.join(suffix_parts)})"
+            gross_amount = parse_amount(row.get("Amount", ""), False)
+            output.append({"Date": formatted_date, "Description": description, "Amount": gross_amount})
+            fee_raw = row.get("Fees", "").strip()
+            if fee_raw and fee_raw not in ("", "0", "0.0"):
+                try:
+                    fee_val = float(fee_raw)
+                    if fee_val != 0:
+                        output.append({"Date": formatted_date, "Description": description, "Amount": str(fee_val)})
+                except ValueError:
+                    pass
+            continue
  
         merchant = row.get(config["desc_cols"][0], "").strip()
         card_name = row.get(config["desc_cols"][1], "").strip()
