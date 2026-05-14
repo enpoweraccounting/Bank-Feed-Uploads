@@ -99,20 +99,14 @@ def load_file(uploaded) -> pd.DataFrame:
     return None
  
 def process(df: pd.DataFrame, config: dict, start: date, end: date) -> pd.DataFrame:
+    start_dt = datetime.combine(start, datetime.min.time())
+    end_dt = datetime.combine(end, datetime.max.time())
     if config.get("banquest"):
-        tuition_pattern = re.compile(r'tu[it]+[ia]?[oi]?[ou]?n', re.IGNORECASE)
+        tuition_pattern = re.compile(r'tu[it]+[ia]?[oi]?[ou]?n|fee s?|registr', re.IGNORECASE)
         total_4010 = 0.0
         total_5180 = 0.0
         formatted_date = start_dt.strftime("%-m/%-d/%Y")
         for _, row in df.iterrows():
-            raw_date = row.get(config["date_col"], "").strip()
-            if not raw_date:
-                continue
-            tx_date = parse_date_flexible(raw_date)
-            if tx_date is None:
-                continue
-            if not (start_dt <= tx_date <= end_dt):
-                continue
             amt_raw = row.get("TotalAmount", "").strip()
             try:
                 amt = float(amt_raw)
@@ -131,8 +125,6 @@ def process(df: pd.DataFrame, config: dict, start: date, end: date) -> pd.DataFr
         return pd.DataFrame(output, columns=["Customer", "Date", "Deposit To", "Product/Service", "Qty", "Rate"])
  
     output = []
-    start_dt = datetime.combine(start, datetime.min.time())
-    end_dt = datetime.combine(end, datetime.max.time())
  
     for _, row in df.iterrows():
         if "exclude_types" in config:
@@ -290,4 +282,3 @@ if convert_clicked:
                         file_name=f"{base_name}.csv",
                         mime="text/csv"
                     )
- 
