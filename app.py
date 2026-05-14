@@ -12,6 +12,12 @@ PLATFORM_CONFIG = {
         "desc_cols": ["Clean Merchant Name", "Card Name", "Card Last 4"],
         "amount_col": "Amount",
     },
+    "Brickyard Bank": {
+        "date_col": "Date",
+        "desc_cols": ["Description"],
+        "amount_col": None,
+        "brickyard": True,
+    },
     "Clearent": {
         "date_col": "Transaction Date",
         "desc_cols": ["Customer Name", "Order ID", "Description"],
@@ -110,7 +116,7 @@ def process(df: pd.DataFrame, config: dict, start: date, end: date) -> pd.DataFr
             if row.get("Status", "").strip().upper() in config["exclude_statuses"]:
                 continue
  
-        desc_check = row.get(config["desc_cols"][0], "").strip().lower()
+        desc_check = row.get(config["desc_cols"][0], "").strip().lower() if config.get("desc_cols") else ""
         if desc_check == "wire deposit":
             continue
  
@@ -129,6 +135,19 @@ def process(df: pd.DataFrame, config: dict, start: date, end: date) -> pd.DataFr
             continue
  
         formatted_date = tx_date.strftime("%-m/%-d/%Y")
+ 
+        if config.get("brickyard"):
+            description = row.get("Description", "").strip()
+            debit = row.get("Debit", "").strip()
+            credit = row.get("Credit", "").strip()
+            if debit:
+                amount = parse_amount(debit, True)
+            elif credit:
+                amount = parse_amount(credit, False)
+            else:
+                continue
+            output.append({"Date": formatted_date, "Description": description, "Amount": amount})
+            continue
  
         if config.get("clearent"):
             customer = row.get("Customer Name", "").strip()
@@ -193,6 +212,7 @@ if "reset_counter" not in st.session_state:
  
 rc = st.session_state["reset_counter"]
 platform = st.selectbox("Platform", [""] + sorted(PLATFORM_CONFIG.keys()), key=f"platform_{rc}")
+account_name = st.text_input("Account Name (Optional)", key=f"account_name_{rc}")
 col1, col2 = st.columns(2)
 with col1:
     start_date = st.date_input("Start date", value=None, key=f"start_date_{rc}")
@@ -226,7 +246,10 @@ if convert_clicked:
                 else:
                     platform_clean = platform.replace(" ", "_")
                     date_range = friendly_date_range(start_date, end_date)
-                    base_name = f"{platform_clean}_{date_range}"
+                    if account_name.strip():
+                        base_name = f"{platform_clean}({account_name.strip()})_{date_range}"
+                    else:
+                        base_name = f"{platform_clean}_{date_range}"
  
                     st.success(f"{len(result)} transactions exported.")
                     st.download_button(
