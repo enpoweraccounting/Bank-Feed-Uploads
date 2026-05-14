@@ -247,7 +247,7 @@ if convert_clicked:
                     platform_clean = platform.replace(" ", "_")
                     date_range = friendly_date_range(start_date, end_date)
                     if account_name.strip():
-                        base_name = f"{platform_clean}({account_name.strip()})_{date_range}"
+                        base_name = f"{platform_clean} ({account_name.strip()})_{date_range}"
                     else:
                         base_name = f"{platform_clean}_{date_range}"
  
