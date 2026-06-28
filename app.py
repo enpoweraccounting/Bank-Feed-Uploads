@@ -36,6 +36,13 @@ PLATFORM_CONFIG = {
         "amount_col": "Amount",
         "donors_fund": True,
     },
+    "Double Giving (Stripe)": {
+        "date_col": "Date",
+        "desc_cols": ["First name", "Last name", "Campaign", "Comment"],
+        "amount_col": "Amount",
+        "double_giving": True,
+        "exclude_statuses": ["Failed", "Offline"],
+    },
 }
  
 def ordinal(n):
@@ -160,6 +167,17 @@ def process(df: pd.DataFrame, config: dict, start: date, end: date) -> pd.DataFr
  
         formatted_date = tx_date.strftime("%-m/%-d/%Y")
  
+        if config.get("double_giving"):
+            first = row.get("First name", "").strip()
+            last = row.get("Last name", "").strip()
+            full_name = " ".join(filter(bool, [first, last]))
+            campaign = row.get("Campaign", "").strip()
+            comment = row.get("Comment", "").strip()
+            description = " - ".join(filter(bool, [full_name, campaign, comment]))
+            amount = parse_amount(row.get("Amount", ""), False)
+            output.append({"Date": formatted_date, "Description": description, "Amount": amount})
+            continue
+ 
         if config.get("brickyard"):
             description = row.get("Description", "").strip()
             debit = row.get("Debit", "").strip()
@@ -282,3 +300,4 @@ if convert_clicked:
                         file_name=f"{base_name}.csv",
                         mime="text/csv"
                     )
+ 
