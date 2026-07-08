@@ -264,6 +264,7 @@ def df_to_csv_bytes(df: pd.DataFrame) -> bytes:
 
 def reset():
     st.session_state["reset_counter"] = st.session_state.get("reset_counter", 0) + 1
+    st.session_state.pop("output", None)
 
 if "reset_counter" not in st.session_state:
     st.session_state["reset_counter"] = 0
@@ -312,21 +313,37 @@ if convert_clicked:
                     if total == 0:
                         st.error("No transactions found in that date range.")
                     else:
-                        st.success(f"{total} transactions exported across {sum([not main_result.empty, not dafpay_result.empty, not paypal_result.empty])} file(s).")
-                        if not main_result.empty:
-                            st.download_button(label=f"Download {base_name}.csv", data=df_to_csv_bytes(main_result), file_name=f"{base_name}.csv", mime="text/csv", key="dg_main")
-                        if not dafpay_result.empty:
-                            st.download_button(label=f"Download {base_name}_DAFpay.csv", data=df_to_csv_bytes(dafpay_result), file_name=f"{base_name}_DAFpay.csv", mime="text/csv", key="dg_dafpay")
-                        if not paypal_result.empty:
-                            st.download_button(label=f"Download {base_name}_PayPal.csv", data=df_to_csv_bytes(paypal_result), file_name=f"{base_name}_PayPal.csv", mime="text/csv", key="dg_paypal")
+                        st.session_state["output"] = {
+                            "base_name": base_name,
+                            "double_giving": True,
+                            "main": df_to_csv_bytes(main_result) if not main_result.empty else None,
+                            "pledger": df_to_csv_bytes(dafpay_result) if not dafpay_result.empty else None,
+                            "paypal": df_to_csv_bytes(paypal_result) if not paypal_result.empty else None,
+                            "total": total,
+                            "file_count": sum([not main_result.empty, not dafpay_result.empty, not paypal_result.empty]),
+                        }
                 else:
                     if result.empty:
                         st.error("No transactions found in that date range.")
                     else:
-                        st.success(f"{len(result)} transactions exported.")
-                        st.download_button(
-                            label=f"Download {base_name}.csv",
-                            data=df_to_csv_bytes(result),
-                            file_name=f"{base_name}.csv",
-                            mime="text/csv"
-                        )
+                        st.session_state["output"] = {
+                            "base_name": base_name,
+                            "double_giving": False,
+                            "main": df_to_csv_bytes(result),
+                            "total": len(result),
+                        }
+
+if "output" in st.session_state:
+    out = st.session_state["output"]
+    base_name = out["base_name"]
+    if out.get("double_giving"):
+        st.success(f"{out['total']} transactions exported across {out['file_count']} file(s).")
+        if out["main"]:
+            st.download_button(label=f"Download {base_name}_Main.csv", data=out["main"], file_name=f"{base_name}_Main.csv", mime="text/csv", key="dg_main")
+        if out["pledger"]:
+            st.download_button(label=f"Download {base_name}_Pledger.csv", data=out["pledger"], file_name=f"{base_name}_Pledger.csv", mime="text/csv", key="dg_pledger")
+        if out["paypal"]:
+            st.download_button(label=f"Download {base_name}_PayPal.csv", data=out["paypal"], file_name=f"{base_name}_PayPal.csv", mime="text/csv", key="dg_paypal")
+    else:
+        st.success(f"{out['total']} transactions exported.")
+        st.download_button(label=f"Download {base_name}.csv", data=out["main"], file_name=f"{base_name}.csv", mime="text/csv", key="single_download")
