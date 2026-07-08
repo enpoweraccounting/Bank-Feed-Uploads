@@ -2,10 +2,10 @@ import streamlit as st
 import pandas as pd
 import re
 from datetime import datetime, date
- 
+
 st.set_page_config(page_title="Bank Feed Uploads", layout="centered")
 st.title("Bank Feed Uploads")
- 
+
 PLATFORM_CONFIG = {
     "Banquest": {
         "date_col": "Date",
@@ -36,27 +36,26 @@ PLATFORM_CONFIG = {
         "amount_col": "Amount",
         "donors_fund": True,
     },
-    "Double Giving (Stripe)": {
+    "Double Giving": {
         "date_col": "Date",
         "desc_cols": ["First name", "Last name", "Campaign", "Comment"],
         "amount_col": "Amount",
         "double_giving": True,
         "exclude_statuses": ["Failed", "Offline"],
+        "dg_split_payment_methods": True,
     },
 }
- 
+
 def ordinal(n):
     s = ["th", "st", "nd", "rd"]
     v = n % 100
     return f"{n}{s[(v - 20) % 10] if (v - 20) % 10 < 4 else s[v] if v < 4 else s[0]}"
- 
+
 def friendly_date_range(start: date, end: date) -> str:
-    months = ["January","February","March","April","May","June",
-              "July","August","September","October","November","December"]
-    s = f"{months[start.month - 1]}_{ordinal(start.day)}"
-    e = f"{months[end.month - 1]}_{ordinal(end.day)}"
+    s = f"{start.month}-{start.day}"
+    e = f"{end.month}-{end.day}"
     return f"{s}_thru_{e}"
- 
+
 def parse_slash_date(s: str):
     s = s.strip()
     m = re.match(r'^(\d{4}-\d{2}-\d{2})\s+(\d{2}):(\d{2}):(\d{2})(AM|PM)$', s, re.IGNORECASE)
@@ -72,7 +71,7 @@ def parse_slash_date(s: str):
         return datetime.strptime(f"{m.group(1)} {hours:02d}:{m.group(3)}:{m.group(4)}", "%Y-%m-%d %H:%M:%S")
     except Exception:
         return None
- 
+
 def parse_amount(val: str, negate: bool) -> str:
     cleaned = str(val).replace("$", "").replace(",", "").strip()
     if re.match(r'^\(.*\)$', cleaned):
@@ -85,7 +84,7 @@ def parse_amount(val: str, negate: bool) -> str:
     if negate:
         return str(-parsed)
     return cleaned
- 
+
 def parse_date_flexible(val: str):
     for fmt in ("%m/%d/%Y", "%Y-%m-%d", "%m/%d/%y",
                 "%m/%d/%Y %H:%M", "%m/%d/%Y %H:%M:%S",
@@ -96,7 +95,7 @@ def parse_date_flexible(val: str):
         except ValueError:
             continue
     return None
- 
+
 def load_file(uploaded) -> pd.DataFrame:
     name = uploaded.name.lower()
     if name.endswith(".csv"):
@@ -104,7 +103,7 @@ def load_file(uploaded) -> pd.DataFrame:
     elif name.endswith(".xlsx"):
         return pd.read_excel(uploaded, dtype=str).fillna("")
     return None
- 
+
 def process(df: pd.DataFrame, config: dict, start: date, end: date) -> pd.DataFrame:
     start_dt = datetime.combine(start, datetime.min.time())
     end_dt = datetime.combine(end, datetime.max.time())
@@ -130,9 +129,11 @@ def process(df: pd.DataFrame, config: dict, start: date, end: date) -> pd.DataFr
         if total_5180:
             output.append({"Customer": "Banquest Income", "Date": formatted_date, "Deposit To": "1499 Undeposited Funds", "Product/Service": "5180 Tuition Fee", "Qty": 1, "Rate": round(total_5180, 2)})
         return pd.DataFrame(output, columns=["Customer", "Date", "Deposit To", "Product/Service", "Qty", "Rate"])
- 
+
     output = []
- 
+    dafpay_output = []
+    paypal_output = []
+
     for _, row in df.iterrows():
         if "exclude_types" in config:
             if row.get("Type", "").strip() in config["exclude_types"]:
@@ -146,27 +147,27 @@ def process(df: pd.DataFrame, config: dict, start: date, end: date) -> pd.DataFr
         if "exclude_statuses" in config:
             if row.get("Status", "").strip().upper() in config["exclude_statuses"]:
                 continue
- 
+
         desc_check = row.get(config["desc_cols"][0], "").strip().lower() if config.get("desc_cols") else ""
         if desc_check == "wire deposit":
             continue
- 
+
         raw_date = row.get(config["date_col"], "").strip()
         if not raw_date:
             continue
- 
+
         if config.get("slash_date"):
             tx_date = parse_slash_date(raw_date)
         else:
             tx_date = parse_date_flexible(raw_date)
- 
+
         if tx_date is None:
             continue
         if not (start_dt <= tx_date <= end_dt):
             continue
- 
+
         formatted_date = tx_date.strftime("%-m/%-d/%Y")
- 
+
         if config.get("double_giving"):
             first = row.get("First name", "").strip()
             last = row.get("Last name", "").strip()
@@ -175,9 +176,17 @@ def process(df: pd.DataFrame, config: dict, start: date, end: date) -> pd.DataFr
             comment = row.get("Comment", "").strip()
             description = " - ".join(filter(bool, [full_name, campaign, comment]))
             amount = parse_amount(row.get("Amount", ""), False)
-            output.append({"Date": formatted_date, "Description": description, "Amount": amount})
+            payment_method = row.get("Payment method", "").strip()
+            if payment_method == "DAFpay - The Donors Fund":
+                continue
+            elif payment_method == "DAFpay - Pledger Charitable":
+                dafpay_output.append({"Date": formatted_date, "Description": description, "Amount": amount})
+            elif payment_method.lower() == "paypal":
+                paypal_output.append({"Date": formatted_date, "Description": description, "Amount": amount})
+            else:
+                output.append({"Date": formatted_date, "Description": description, "Amount": amount})
             continue
- 
+
         if config.get("brickyard"):
             description = row.get("Description", "").strip()
             debit = row.get("Debit", "").strip()
@@ -190,7 +199,7 @@ def process(df: pd.DataFrame, config: dict, start: date, end: date) -> pd.DataFr
                 continue
             output.append({"Date": formatted_date, "Description": description, "Amount": amount})
             continue
- 
+
         if config.get("clearent"):
             customer = row.get("Customer Name", "").strip()
             order_id = row.get("Order ID", "").strip()
@@ -201,7 +210,7 @@ def process(df: pd.DataFrame, config: dict, start: date, end: date) -> pd.DataFr
             amount = parse_amount(row.get("Amount", ""), False)
             output.append({"Date": formatted_date, "Description": description, "Amount": amount})
             continue
- 
+
         if config.get("donors_fund"):
             shared_name = row.get("Shared Name", "").strip()
             shared_fund = row.get("Shared Fund Name", "").strip()
@@ -224,7 +233,7 @@ def process(df: pd.DataFrame, config: dict, start: date, end: date) -> pd.DataFr
                 except ValueError:
                     pass
             continue
- 
+
         merchant = row.get(config["desc_cols"][0], "").strip()
         card_name = row.get(config["desc_cols"][1], "").strip()
         card_last_raw = str(row.get(config["desc_cols"][2], "")).strip()
@@ -233,25 +242,32 @@ def process(df: pd.DataFrame, config: dict, start: date, end: date) -> pd.DataFr
         else:
             card_last = card_last_raw.lstrip("'").rstrip(".0") if card_last_raw.endswith(".0") else card_last_raw.lstrip("'")
         description = " - ".join(filter(bool, [merchant, card_name, card_last]))
- 
+
         amount = parse_amount(row.get(config["amount_col"], ""), config.get("negate_amount", False))
         output.append({"Date": formatted_date, "Description": description, "Amount": amount})
- 
-    result = pd.DataFrame(output, columns=["Date", "Description", "Amount"])
-    if not result.empty:
-        result["_sort"] = pd.to_datetime(result["Date"], errors="coerce")
-        result = result.sort_values("_sort", ascending=False).drop(columns=["_sort"])
+
+    def sort_df(rows):
+        df = pd.DataFrame(rows, columns=["Date", "Description", "Amount"])
+        if not df.empty:
+            df["_sort"] = pd.to_datetime(df["Date"], errors="coerce")
+            df = df.sort_values("_sort", ascending=False).drop(columns=["_sort"])
+        return df
+
+    if config.get("double_giving"):
+        return sort_df(output), sort_df(dafpay_output), sort_df(paypal_output)
+
+    result = sort_df(output)
     return result
- 
+
 def df_to_csv_bytes(df: pd.DataFrame) -> bytes:
     return df.to_csv(index=False).encode("utf-8")
- 
+
 def reset():
     st.session_state["reset_counter"] = st.session_state.get("reset_counter", 0) + 1
- 
+
 if "reset_counter" not in st.session_state:
     st.session_state["reset_counter"] = 0
- 
+
 rc = st.session_state["reset_counter"]
 platform = st.selectbox("Platform", [""] + sorted(PLATFORM_CONFIG.keys()), key=f"platform_{rc}")
 account_name = st.text_input("Account Name (Optional)", key=f"account_name_{rc}")
@@ -260,10 +276,10 @@ with col1:
     start_date = st.date_input("Start date", value=None, key=f"start_date_{rc}")
 with col2:
     end_date = st.date_input("End date", value=None, key=f"end_date_{rc}")
- 
+
 st.divider()
 uploaded_file = st.file_uploader("Source file", type=["csv", "xlsx"], key=f"uploader_{rc}")
- 
+
 col_btn1, col_btn2 = st.columns([2, 1])
 with col_btn1:
     convert_clicked = st.button("Convert", type="primary", disabled=not all([platform, start_date, end_date, uploaded_file]))
@@ -271,7 +287,7 @@ with col_btn2:
     if st.button("Clear / Reset", use_container_width=True):
         reset()
         st.rerun()
- 
+
 if convert_clicked:
     config = PLATFORM_CONFIG.get(platform)
     if not config:
@@ -283,21 +299,34 @@ if convert_clicked:
                 st.error("Could not read file.")
             else:
                 result = process(df, config, start_date, end_date)
-                if result.empty:
-                    st.error("No transactions found in that date range.")
+                platform_clean = platform.replace(" ", "_")
+                date_range = friendly_date_range(start_date, end_date)
+                if account_name.strip():
+                    base_name = f"{platform_clean} ({account_name.strip()})_{date_range}"
                 else:
-                    platform_clean = platform.replace(" ", "_")
-                    date_range = friendly_date_range(start_date, end_date)
-                    if account_name.strip():
-                        base_name = f"{platform_clean} ({account_name.strip()})_{date_range}"
+                    base_name = f"{platform_clean}_{date_range}"
+
+                if config.get("double_giving"):
+                    main_result, dafpay_result, paypal_result = result
+                    total = len(main_result) + len(dafpay_result) + len(paypal_result)
+                    if total == 0:
+                        st.error("No transactions found in that date range.")
                     else:
-                        base_name = f"{platform_clean}_{date_range}"
- 
-                    st.success(f"{len(result)} transactions exported.")
-                    st.download_button(
-                        label=f"Download {base_name}.csv",
-                        data=df_to_csv_bytes(result),
-                        file_name=f"{base_name}.csv",
-                        mime="text/csv"
-                    )
- 
+                        st.success(f"{total} transactions exported across {sum([not main_result.empty, not dafpay_result.empty, not paypal_result.empty])} file(s).")
+                        if not main_result.empty:
+                            st.download_button(label=f"Download {base_name}.csv", data=df_to_csv_bytes(main_result), file_name=f"{base_name}.csv", mime="text/csv", key="dg_main")
+                        if not dafpay_result.empty:
+                            st.download_button(label=f"Download {base_name}_DAFpay.csv", data=df_to_csv_bytes(dafpay_result), file_name=f"{base_name}_DAFpay.csv", mime="text/csv", key="dg_dafpay")
+                        if not paypal_result.empty:
+                            st.download_button(label=f"Download {base_name}_PayPal.csv", data=df_to_csv_bytes(paypal_result), file_name=f"{base_name}_PayPal.csv", mime="text/csv", key="dg_paypal")
+                else:
+                    if result.empty:
+                        st.error("No transactions found in that date range.")
+                    else:
+                        st.success(f"{len(result)} transactions exported.")
+                        st.download_button(
+                            label=f"Download {base_name}.csv",
+                            data=df_to_csv_bytes(result),
+                            file_name=f"{base_name}.csv",
+                            mime="text/csv"
+                        )
